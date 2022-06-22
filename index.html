@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+
+<head>
+  <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/zlibjs@0.3.1/bin/node-zlib.min.js"></script>
+  <script src="https://unpkg.com/aframe-event-set-component@3.0.3/dist/aframe-event-set-component.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v6.1.1/dist/aframe-extras.min.js"></script>
+  <script
+    src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"
+    integrity="sha512-UXumZrZNiOwnTcZSHLOfcTs0aos2MzBWHXOHOuB0J/R44QB0dwY5JgfbvljXcklVf65Gc4El6RjZ+lnwd2az2g=="
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"
+  ></script>
+  <script src="./clicker.min.js"></script>
+  <script>
+    AFRAME.registerComponent("circle-layout", {
+      schema: {
+        radius: { type: "number", default: 1 },
+      },
+
+      init: function () {
+        var childCount = this.el.children.length;
+
+        var angle = (Math.PI * 2) / childCount;
+
+        for (var i = 0; i < childCount; i++) {
+          var z = Math.cos(i * angle) * this.data.radius;
+          var x = Math.sin(i * angle) * this.data.radius;
+
+          this.el.children[i].object3D.rotation.y = angle * i + Math.PI;
+          this.el.children[i].object3D.position.x = x;
+          this.el.children[i].object3D.position.z = z;
+        }
+      },
+    });
+
+    AFRAME.registerComponent("box-constraint", {
+      schema: {
+        min: { type: "string", default: "-10 -10 -40" },
+        max: { type: "string", default: "10 10 60" },
+      },
+      init: function () {
+        // Convert the min / max string (text) into an actual vector
+        this.min = new THREE.Vector3(
+          ...this.data.min.split(" ").map((n) => parseFloat(n))
+        );
+        this.max = new THREE.Vector3(
+          ...this.data.max.split(" ").map((n) => parseFloat(n))
+        );
+
+        this.t = 0;
+      },
+      tick: function () {
+        this.t++;
+
+        // if (this.t % 10 == 0) {
+        //   console.log(this.el.object3D.position);
+        // }
+
+        // setting the x position of the camera to either itself, or the bounds of the box
+        // depending on which one is bigger. Math.max()
+        this.el.object3D.position.x = Math.max(
+          this.el.object3D.position.x,
+          this.min.x
+        );
+        this.el.object3D.position.x = Math.min(
+          this.el.object3D.position.x,
+          this.max.x
+        );
+
+        this.el.object3D.position.y = Math.max(
+          this.el.object3D.position.y,
+          this.min.y
+        );
+        this.el.object3D.position.y = Math.min(
+          this.el.object3D.position.y,
+          this.max.y
+        );
+
+        this.el.object3D.position.z = Math.max(
+          this.el.object3D.position.z,
+          this.min.z
+        );
+        this.el.object3D.position.z = Math.min(
+          this.el.object3D.position.z,
+          this.max.z
+        );
+
+        // TODO - Y / Z...
+      },
+    }); //
+
+    AFRAME.registerComponent("play-sound", {
+      schema: {
+        href: { type: "string", default: "" },
+      },
+      init: function () {
+        let isPlaying = false;
+
+        const el = this.el;
+        function playSound() {
+          if (isPlaying) {
+            el.components.sound.pauseSound();
+            isPlaying = false;
+          } else {
+            el.components.sound.playSound();
+            isPlaying = true;
+          }
+        }
+
+        this.el.onclick = playSound;
+      },
+    });
+
+    AFRAME.registerComponent("clickable", {
+      schema: {
+        href: { type: "string", default: "" },
+      },
+      init: function () {
+        this.el.onclick = () => {
+          window.location.href = this.data.href;
+        };
+      },
+    });
+
+    AFRAME.registerComponent("fade-in", {
+      schema: {
+        start: { type: "number", default: 0 },
+        duration: { type: "number", default: 5000 },
+      },
+
+      init: function () {
+        this.el.sceneEl.renderer.sortObjects = true;
+        this.el.object3D.renderOrder = 100;
+        this.el.components.material.material.depthTest = false;
+      },
+
+      tock: function (time) {
+        var quat = this.el.parentEl.object3D.quaternion.clone();
+        quat.invert();
+        this.el.object3D.setRotationFromQuaternion(quat);
+
+        // Check if the "time"
+        if (time < this.data.start) return;
+
+        if (time > this.data.start + this.data.duration) {
+          this.el.parentNode.removeChild(this.el);
+          return;
+        }
+
+        // Check how far along we are relative to the fade duration
+        var opacity = 1.0 - (time - this.data.start) / this.data.duration;
+
+        this.el.setAttribute("material", {
+          opacity,
+        });
+      },
+    });
+
+    const deviceType = () => {
+      const ua = navigator.userAgent;
+      if (/(tablet|ipad|playbook|silk)|(android(?!.*mobi))/i.test(ua)) {
+        return "tablet";
+      } else if (
+        /Mobile|Android|iP(hone|od)|IEMobile|BlackBerry|Kindle|Silk-Accelerated|(hpw|web)OS|Opera M(obi|ini)/.test(
+          ua
+        )
+      ) {
+        return "mobile";
+      }
+      return "desktop";
+    };
+
+    const isDesktop = () => deviceType() === "desktop";
+
+    AFRAME.registerComponent("drag-controls", {
+      init: function () {
+        if (isDesktop()) return;
+
+        this.data.camera = this.el.querySelector("[camera]");
+
+        this.deltaX = 0;
+        this.deltaY = 0;
+
+        // movement-controls
+        const scene = document.getElementById("scene");
+        this.mc = new Hammer(scene);
+
+        this.mc.get("pan").set({ direction: Hammer.DIRECTION_ALL });
+
+        this.pan = { up: 0, right: 0 };
+        const that = this;
+
+        this.mc.on("panstart", function (data) {
+          that.pan.start = { ...data.center };
+        });
+
+        this.mc.on("panup panright panleft pandown", function (data) {
+          if (data.type === "panup" || data.type === "pandown")
+            that.pan.up = data.center.y - that.pan.start.y;
+
+          if (data.type === "panright" || data.type === "panleft")
+            that.pan.right = data.center.x - that.pan.start.x;
+        });
+
+        this.mc.on("panend", function (data) {
+          that.pan = { up: 0, right: 0 };
+        });
+
+        let isPlaying = false;
+
+        const soundEl = document.getElementById("the-sound");
+        function playSound() {
+          if (isPlaying) {
+            soundEl.components.sound.pauseSound();
+            isPlaying = false;
+          } else {
+            soundEl.components.sound.playSound();
+            isPlaying = true;
+          }
+        }
+
+        this.mc.on("tap", playSound);
+      },
+      tick: function (t, dt) {
+        if (isDesktop()) return;
+
+        let velocity = new THREE.Vector3(
+          (dt * this.pan.right) / 1000,
+          0,
+          (dt * this.pan.up) / 1000
+        );
+        const quaternion = new THREE.Quaternion();
+        quaternion.copy(this.data.camera.object3D.quaternion);
+        quaternion.premultiply(this.el.object3D.quaternion);
+        velocity.applyQuaternion(quaternion);
+
+        this.el.object3D.position.x += velocity.x;
+        this.el.object3D.position.z += velocity.z;
+      },
+    });
+  </script>
+</head>
+
+<body>
+  <a-scene id="scene">
+    <a-assets>
+      <img id="sunrise" src="https://i.imgur.com/sIqyGAg.jpg" />
+    </a-assets>
+
+    <a-entity movement-controls box-constraint drag-controls position="0 5 80">
+      <a-camera id="camera" look-controls="touchEnabled:false" box-constraint>
+        <a-sphere
+          fade-in="start:5000; duration:2000"
+          material="shader:flat; side:double; transparent:true; opacity:1"
+          src="https://cdn.glitch.global/8703d003-a443-4b34-9839-3c143b3c6708/Plexa%20Artboard.jpg?v=1652379271260"
+          radius="2"
+          color="#fff"
+        ></a-sphere>
+        <a-cursor color="white"></a-cursor>
+      </a-camera>
+      <a-entity oculus-touch-controls="hand: left"></a-entity>
+
+      <a-entity
+        oculus-touch-controls="hand: right"
+        laser-controls
+        raycaster="far: 200"
+      ></a-entity>
+    </a-entity>
+    <a-entity cursor="rayOrigin: mouse"></a-entity>
+    <!-- Camera + controllers rig -->
+    <!--<a-entity id="rig">
+      <a-camera box-constraint position="0 5 80">
+        <a-cursor></a-cursor>
+      </a-camera>
+      <a-entity oculus-touch-controls="hand: left"></a-entity>
+      <a-entity
+        oculus-touch-controls="hand: right"
+        oculus-thumbstick-controls
+      ></a-entity>
+    </a-entity>-->
+
+    <a-sky src="#sunrise" color="#a5cfce"></a-sky>
+
+    <a-entity position="0 5 0" circle-layout="radius:35">
+      <a-plane width="30" height="50" opacity="0"></a-plane>
+      <a-plane width="30" height="50" opacity="0"></a-plane>
+      <a-plane width="30" height="50" opacity="0.3"></a-plane>
+      <a-plane width="30" height="50" opacity="0"></a-plane>
+      <a-plane width="30" height="50" opacity="0.3"></a-plane>
+      <a-plane width="30" height="50" opacity="0"></a-plane>
+      <a-plane width="30" height="50" opacity="0.3"></a-plane>
+      <a-plane width="30" height="50" opacity="0"></a-plane>
+    </a-entity>
+
+    <a-plane
+      id="floor"
+      src="https://cdn.glitch.global/a2925d6c-6bd6-49f9-8c24-5308dee09972/clear%2Bsea%2Bwater-2048x2048.jpeg?v=1651055715116"
+      color="teal"
+      repeat="1 1"
+      position="0 -20 15"
+      rotation="-90 0 0"
+      width="50"
+      height="90"
+    ></a-plane>
+
+<a-image
+        id="back"     
+      position="-100 100 -100"
+      scale="50 50 50"
+      src="https://cdn.glitch.global/34f76b7e-10bf-4996-81c0-ea0ada6f0b7e/BACK%202.png?v=1653580351033"
+      clickable="href:https://plexa.glitch.me"></a-image> 
+
+    <a-image
+
+    <a-image
+      id="title"
+      position="0 70 -50"
+      src="https://cdn.glitch.global/a2925d6c-6bd6-49f9-8c24-5308dee09972/Coastal%20Couturier%20Header.png?v=1652339652086"
+      scale="70 70 70"
+    ></a-image>
+
+    <a-text
+      position="0 50 -50"
+      value="
+Edinburgh College of Art graduate Jasmine Linington uses ethically farmed seaweed to innovate sustainable fashion textiles
+"
+      scale="12 12 12"
+      opacity="1"
+      rotation="0 0 0"
+      align="center"
+    ></a-text>
+
+    <a-text
+      position="-34 5 14"
+      value="Boots trudging through smooth pebbles, waves lapping over her feet, Jasmine Linington has always had an affinity for the shores of the East Lothian coastline. ''Nothing quite beats a trip to the beach to harvest seaweed,'' says the artist. ''I feel fortunate to have always lived near the coast and I suppose this inadvertently drew me to question seaweed as a potential sustainable material.''Despite the plant's somewhat slimy nature, Linington was an early adopter. She recalls, ''Seven years ago I saw this plant for what it is - beautiful, highly sustainable and multifaceted.''
+
+The walls of Linington's Edinburgh studio are lined with small glass bottles containing mysterious species of seaweed and algae that sit next to silky spools of SeaCell yarn. This is where she creates her seaweed masterpieces. ''I have most recently been captivated by ways in which nature, in particular, seaweed, can be transformed into functioning materials that showcase its beauty in unique and unexpected ways, while being respectful towards its habitat,'' she says. ''My work targets the eco-conscious consumer who is seeking something that is both beautiful and unique.'' 
+
+             "
+      scale="5 5 5"
+      opacity="1"
+      rotation="0 90 0"
+      color="black"
+    ></a-text>
+
+    <a-text
+      position="-34 -16 1.5"
+      value="1"
+      scale="5 5 5"
+      color="black"
+      rotation="0 90 0"
+    ></a-text>
+
+    <a-text
+      position="-12 5 -34"
+      value=" 
+Graduating with a Master of Fine Arts from Edinburgh College of Art in 2019, Linington's innovative graduate collection, Seaweed Girl, showed several uses of seaweed as a luxury textile. ''As a natural sequester of CO2 and the world's most ubiquitous plant it seemed an obvious choice of material for me to try and work with,'' explains Linington, ''it has been extremely fun and rewarding to work with a material that isn't known so commonly within the textile industry.'' 
+
+Trims of seaweed frills run down sleeves, flaring out dramatically at the cuff. SeaCell fibres are spun into a sleek yarn before being knitted into garments and feathered into tufts that float out of hemlines. ''The fibre I use is called SeaCell (made by SmartFibre AG) and is composed of wood and seaweed'' reveals Linington. SeaCell is an Austrian-made fibre produced by using nanotechnology to crush dried seaweed into cellulose fibres, using a closed-loop Lyocell process. The result is a soft, breathable material with antibacterial properties.
+
+One of Linington's crowning achievements is the glossy bead clusters that form dangly earrings made by encasing flecks of seaweed in eco-resin. ''The story behind my beads began when I was trying to find a second purpose for the leftover seaweed that I use to create my natural dyes,'' she reveals. ''Since this initial development, I have added in a variety of other seaweed species from their natural state to showcase the wonderful range of colours that seaweed has to offer.'' She sells the earrings, alongside seaweed pressings, SeaCell cushions and wall art, on her website. 
+"
+      scale="5 5 5"
+      opacity="1"
+      rotation="0 0 0"
+      color="black"
+    ></a-text>
+
+    <a-text
+      position="-0.2 -17 -34"
+      value="2"
+      scale="5 5 5"
+      color="black"
+    ></a-text>
+
+    <a-text
+      position="34 5 -12"
+      value="
+Through trial and error with a zero-waste approach, Linington has developed unique sustainable processes to preserve the kelp. ''My kelp sequins go through many processes to get to their end-stage. They are also completely plant-based and, like other natural materials, are biodegradable. The step by step processes have taken me a number of years to develop and I am not ready to share.'' 
+
+In 2021 Linington was awarded the Inches Carr Graduate Craft Award, for those who have undertaken study in Contemporary Craft and practised in Scotland. With an exhibition at Collect, Craft Scotland in February 2022, Linington is optimistic about the future. She remains engaged in the possibilities of innovation to help create more sustainable textiles. ''Sustainability to me is always going to be evolving and for this reason, it makes it interesting as there is always growth for learning, exploring and experimentation.''
+"
+      scale="5 5 5"
+      opacity="1"
+      rotation="0 -90 0"
+      color="black"
+    ></a-text>
+
+    <a-text
+      position="34 -16 0"
+      value="3"
+      scale="5 5 5"
+      color="black"
+      rotation="0 -90 0"
+    ></a-text>
+
+    <a-image
+      id="seaweedwomancollection1"
+      position="-24 -4 -24"
+      src="https://cdn.glitch.global/a2925d6c-6bd6-49f9-8c24-5308dee09972/seaweed-girl-jasmine-linington-design_dezeen_2364_col_7-852x570.jpeg?v=1652381342668"
+      rotation="0 45 0"
+      width="20"
+      height="20"
+    ></a-image>
+
+    <a-text
+      position="-24 8 -25"
+      value="Linington mixes home-cured seaweed with SeaCell
+                                         Photographer:Jasmine Linington"
+      rotation="0 45 0"
+      scale=" 3 3 3"
+      align="center"
+    ></a-text>
+
+    <a-image
+      id="seaweedwoman2"
+      position="24 -4 -24"
+      src="https://cdn.glitch.global/a2925d6c-6bd6-49f9-8c24-5308dee09972/seaweed-girl-jasmine-linington-design_dezeen_2364_col_0-852x549.jpeg?v=1652381346442"
+      rotation="0 -45 0"
+      width="20"
+      height="20"
+    ></a-image>
+
+    <a-text
+      position="24 8 -24"
+      value="Linington's seaweed eco-resin beads add a beautiful alternative adornment.
+Photographer :Jasmine Linington"
+      rotation="0 -45 0"
+      scale=" 3 3 3"
+      align="center"
+    ></a-text>
+
+    <a-image
+      id="seaweedwomancollection3"
+      position="-24 20 -24"
+      src="https://cdn.glitch.global/a2925d6c-6bd6-49f9-8c24-5308dee09972/seaweed-girl-jasmine-linington-design_dezeen_2364_col_2.jpg?v=1652381336042"
+      rotation="0 45 0"
+      width="20"
+      height="20"
+    ></a-image>
+
+    <a-text
+      position="-24 -16 -24"
+      value="Preserved kelp sequins trail along SeaCell knit. 
+             Photographer :Jasmine Linington"
+      rotation="0 45 0"
+      scale=" 3 3 3"
+      align="center"
+    ></a-text>
+
+    <a-image
+      id="seaweedwoman4"
+      position="24 20 -24"
+      src="https://cdn.glitch.global/a2925d6c-6bd6-49f9-8c24-5308dee09972/seaweed-girl-jasmine-linington-design_dezeen_2364_col_5-852x570.jpg?v=1651055437750"
+      rotation="0 -45 0"
+      width="20"
+      height="20"
+    ></a-image>
+
+    <a-text
+      position="24 -16 -24"
+      value="SeaCell fibre
+      Photographer :Jasmine Linington"
+      rotation="0 -45 0"
+      scale=" 3 3 3"
+      align="center"
+    ></a-text>
+
+    <a-entity
+      id="the-sound"
+      play-sound
+      sound="src:https://cdn.glitch.global/a2925d6c-6bd6-49f9-8c24-5308dee09972/Coastal-Couturier.m4a?v=1652462292641;autoplay:false;volume:5"
+    >
+      <a-gltf-model
+        id="speaker1"
+        position="25 -25 -15"
+        scale="0.01 0.01 0.01"
+        rotation="0 -45 0"
+        material="color: #ffffff"
+        src="https://cdn.glitch.global/8703d003-a443-4b34-9839-3c143b3c6708/2_ways_speaker_speakerbox.glb?v=1648126593713"
+      >
+      </a-gltf-model>
+      <a-gltf-model
+        id="speaker2"
+        position="-20 -25 -22"
+        scale="0.01 0.01 0.01"
+        rotation="0 45 0"
+        material="color: #ffffff"
+        src="https://cdn.glitch.global/8703d003-a443-4b34-9839-3c143b3c6708/2_ways_speaker_speakerbox.glb?v=1648126593713"
+      >
+      </a-gltf-model>
+    </a-entity>
+
+    <a-entity
+      geometry="primitive:sphere"
+      scale="150 150 150"
+      position="0 0 -200"
+      material="color:#ACF6EA;opacity:0.3"
+    ></a-entity>
+  </a-scene>
+</body>
